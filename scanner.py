@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Proxy Panel Scanner v7 — نسخه آنلاین (Railway / VPS / Termux)
-- پورت‌ها: 1081, 1082, 1083, 14111
+Proxy Panel Scanner v8 — نسخه آنلاین (Railway / VPS / Termux)
+- گروه پورت‌ها: fast / normal / full (ده‌ها پورت پرکاربرد SOCKS5 و HTTP)
 - تشخیص خودکار: SOCKS5 / SOCKS4 / HTTP CONNECT / HTTP Forward
 - Egress (IP خروجی) + پرچم + کشور + ISP
 - پینگ اصلی پنل + تأخیر واقعی
@@ -28,8 +28,54 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ================= پورت وب‌سرور =================
 PORT = int(os.environ.get('PORT', 5000))
 
-# ================= پورت‌های اسکن =================
-SCAN_PORTS = [1081, 1082, 1083, 14111]
+# ================= پورت‌های اسکن (گروهی) =================
+# پورت‌های پرکاربرد SOCKS5 / SOCKS4 / HTTP Proxy در دنیای واقعی
+PORT_GROUPS = {
+    # فقط پورت‌های اصلی و پرتکرار — اسکن سریع
+    'fast': [
+        1080, 1081, 1082, 1083,           # استاندارد SOCKS
+        10808,                             # v2rayN (پیش‌فرض SOCKS)
+        7890,                              # Clash
+        9050,                              # Tor
+        8080, 3128, 8888,                  # HTTP پرکاربرد
+    ],
+    # پورت‌های رایج SOCKS5 + تانل + HTTP — پیشنهادی
+    'normal': [
+        1080, 1081, 1082, 1083, 1084, 1085, 1086, 1087, 1088,
+        10808, 10809, 10810,               # v2rayN / v2rayNG
+        7890, 7891, 7897,                  # Clash / Clash Verge
+        9050, 9051, 9150,                  # Tor
+        2080, 1180,                        # sing-box / تانل‌های رایج
+        4145,                              # SOCKS4 استاندارد
+        14111,
+        8080, 8081, 9080,
+        3128, 8443, 8888, 8889,
+    ],
+    # همه پورت‌های شناخته‌شده — کامل ولی کند (ترید بالا لازمه)
+    'full': [
+        1080, 1081, 1082, 1083, 1084, 1085, 1086, 1087, 1088, 1089, 1090,
+        1180, 1688,
+        2080, 2081,
+        3080, 3081,
+        4080,
+        5080, 5081,
+        6080,
+        7080,
+        8080, 8081,
+        9080, 9081,
+        9050, 9051, 9150, 9300, 9415,
+        7890, 7891, 7892, 7893, 7897,
+        10808, 10809, 10810,
+        4145, 14111, 33128, 36081, 45554, 49149, 52665, 5678,
+        3128, 8000, 8008, 8118, 8123, 8181,
+        8443, 8888, 8889,
+        9000, 9090, 9999,
+        53281, 60080, 10080, 20000,
+    ],
+}
+for _g in PORT_GROUPS:
+    PORT_GROUPS[_g] = sorted(set(PORT_GROUPS[_g]))
+
 MAX_RANGE = 65536
 
 cfg = {'port_timeout': 3, 'proxy_timeout': 8}
@@ -51,6 +97,8 @@ GEO_PATH = '/json?fields=status,query,country,countryCode,isp'
 state = {
     'collected_pairs': [],
     'scan_results': [],
+    'scan_ports': list(PORT_GROUPS['normal']),
+    'port_group': 'normal',
     'running': False,
     'stop_flag': False,
     'total': 0, 'done': 0, 'alive': 0,
@@ -407,13 +455,14 @@ def collect_pairs(custom_text, cidr_text):
 
 # ================= اجرای اسکن =================
 def run_scan(threads):
-    """اسکن: هر IP بدون پورت → هر ۴ پورت | هر IP:Port → فقط همون"""
+    """اسکن: هر IP بدون پورت → پورت‌های گروه انتخابی | هر IP:Port → فقط همون"""
     with lock:
         pairs = list(state['collected_pairs'])
+        scan_ports = list(state['scan_ports'])
         tasks = []
         tseen = set()
         for ip, pt in pairs:
-            plist = [pt] if pt else SCAN_PORTS
+            plist = [pt] if pt else scan_ports
             for p in plist:
                 k = (ip, p)
                 if k not in tseen:
@@ -550,11 +599,13 @@ def sorted_results():
 
 
 def build_text(dl=False):
+    with lock:
+        ports = list(state['scan_ports'])
     res = sorted_results()
     L = []
     if dl:
         L += ["Proxy Panel Scanner Results - " + time.strftime('%Y-%m-%d %H:%M'),
-              "Ports: " + ', '.join(str(p) for p in SCAN_PORTS),
+              "Ports (" + str(len(ports)) + "): " + ', '.join(str(p) for p in ports),
               "=" * 60, ""]
     for r in res:
         L += [
@@ -611,6 +662,7 @@ select option { background:#1a1a2e; }
 .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 @media(max-width:640px){ .grid2{ grid-template-columns:1fr; } }
 .lbl { color:#9aa; font-size:.82em; margin-bottom:6px; display:block; }
+.hint { color:#667; font-size:.72em; margin-top:5px; }
 button { padding:12px 24px; border:none; border-radius:10px; font-size:14px; font-weight:bold;
          cursor:pointer; font-family:inherit; transition:.25s; }
 button:disabled { opacity:.4; cursor:not-allowed; }
@@ -695,16 +747,23 @@ button:disabled { opacity:.4; cursor:not-allowed; }
 
 <div class="step">
     <div class="step-title"><span class="step-num">1</span> ورودی IP ها
-        <span class="badge" style="margin-right:auto;">پورت‌ها: 1081 | 1082 | 1083 | 14111</span>
+        <span class="badge" id="portBadge" style="margin-right:auto;" title="برای دیدن لیست پورت‌ها موس رو نگه دار">پورت‌ها: ...</span>
     </div>
     <div class="grid2">
         <div>
             <span class="lbl">IP دلخواه (IP یا IP:Port هر خط یکی)</span>
             <textarea id="customIps" placeholder="161.35.90.0/24&#10;161.35.90.93:1082&#10;45.12.33.7"></textarea>
+            <span class="hint">💡 اگر IP:Port بدی، فقط همون پورت تست میشه</span>
         </div>
         <div>
             <span class="lbl">رنج خودکار (CIDR)</span>
             <input type="text" id="cidrInput" placeholder="161.35.90.0/24" style="margin-bottom:10px;">
+            <span class="lbl">گروه پورت‌های اسکن</span>
+            <select id="portGroup" onchange="updatePortBadge()" style="margin-bottom:10px;">
+                <option value="fast">⚡ سریع — پورت‌های اصلی</option>
+                <option value="normal" selected>🎯 معمولی — رایج‌ترین‌ها (پیشنهادی)</option>
+                <option value="full">🔥 کامل — همه پورت‌ها (کند)</option>
+            </select>
             <div class="grid2" style="gap:8px;">
                 <div>
                     <span class="lbl">Threads</span>
@@ -719,6 +778,7 @@ button:disabled { opacity:.4; cursor:not-allowed; }
                     </select>
                 </div>
             </div>
+            <span class="hint">💡 برای گروه «کامل» ترید ۳۰۰ به بالا بذار</span>
         </div>
     </div>
     <button class="b-confirm" onclick="collectIPs()">✓ تایید و جمع‌آوری</button>
@@ -770,6 +830,17 @@ button:disabled { opacity:.4; cursor:not-allowed; }
 
 <script>
 var pollTimer = null, curFilter = 'all', sortLat = false, cacheResults = [];
+var PORT_DATA = {};
+
+function updatePortBadge() {
+    var sel = document.getElementById('portGroup');
+    var g = sel.value;
+    var names = {fast:'سریع', normal:'معمولی', full:'کامل'};
+    var cnt = (PORT_DATA[g] && PORT_DATA[g].count) ? PORT_DATA[g].count : '?';
+    var b = document.getElementById('portBadge');
+    b.textContent = 'گروه ' + names[g] + ' — ' + cnt + ' پورت';
+    b.title = (PORT_DATA[g] && PORT_DATA[g].ports) ? 'پورت‌ها: ' + PORT_DATA[g].ports.join(', ') : 'لیست پورت‌ها';
+}
 
 function loadPanelInfo() {
     fetch('/api/panel_info').then(function(r){ return r.json(); }).then(function(d){
@@ -793,11 +864,18 @@ function collectIPs() {
     var ci = document.getElementById('cidrInput').value;
     if (!cu.trim() && !ci.trim()) { showToast('حداقل یک ورودی پر کن!'); return; }
     fetch('/api/collect', {method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({custom:cu, cidr:ci})})
+        body: JSON.stringify({custom:cu, cidr:ci,
+            port_group: document.getElementById('portGroup').value})})
     .then(function(r){ return r.json(); })
     .then(function(d){
         if (d.error) { showToast('❌ ' + d.error); return; }
         if (!d.pairs || !d.pairs.length) { showToast('هیچ IP معتبری نبود!'); return; }
+        if (d.ports) {
+            PORT_DATA[d.group || document.getElementById('portGroup').value] =
+                {ports:d.ports, count:d.ports.length};
+            updatePortBadge();
+        }
+        if (d.warn) { showToast('⚠️ ' + d.warn); }
         document.getElementById('step2').style.display = 'block';
         document.getElementById('c2').textContent = d.pairs.length + ' IP';
         var items = [];
@@ -827,9 +905,14 @@ function runSelftest() {
 }
 
 function startScan() {
+    var g = document.getElementById('portGroup').value;
+    var th = parseInt(document.getElementById('threadInput').value)||200;
+    if (g==='full' && th<300) {
+        showToast('💡 گروه کامل انتخاب شده — ترید ۳۰۰+ پیشنهاد میشه');
+    }
     fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({
-            threads: parseInt(document.getElementById('threadInput').value)||200,
+            threads: th,
             timeout: parseInt(document.getElementById('timeoutInput').value)||8
         })})
     .then(function(r){ return r.json(); })
@@ -869,7 +952,7 @@ function diagnose(d) {
     var b=document.getElementById('diag');
     if (d.alive>0) { b.className='diag good'; b.innerHTML='🎉 '+d.alive+' پروکسی سالم پیدا شد!'; }
     else if (d.opened===0) { b.className='diag warn';
-        b.innerHTML='هیچ پورتی باز نبود. رنج دیگه امتحان کن.'; }
+        b.innerHTML='هیچ پورتی باز نبود. رنج دیگه امتحان کن یا گروه پورت «کامل» رو بزن.'; }
     else { b.className='diag warn';
         b.innerHTML=d.opened+' پورت باز بود ولی پروکسی واقعی نبودن.'; }
 }
@@ -1001,6 +1084,9 @@ function showToast(m) {
 
 window.onload=function(){
     loadPanelInfo();
+    fetch('/api/ports').then(function(r){ return r.json(); }).then(function(d){
+        PORT_DATA=d; updatePortBadge();
+    }).catch(function(){});
     fetch('/api/results').then(function(r){ return r.json(); }).then(function(d){
         if (d.results && d.results.length) {
             document.getElementById('step3').style.display='block';
@@ -1046,6 +1132,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, HTML, 'text/html; charset=utf-8')
         elif p == '/api/panel_info':
             self._json(get_panel_info())
+        elif p == '/api/ports':
+            self._json({g: {'ports': pl, 'count': len(pl)}
+                        for g, pl in PORT_GROUPS.items()})
         elif p == '/api/status':
             with lock:
                 self._json({k: state[k] for k in
@@ -1080,9 +1169,20 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 self._json({'error': err})
                 return
+            group = body.get('port_group', 'normal')
+            if group not in PORT_GROUPS:
+                group = 'normal'
             with lock:
                 state['collected_pairs'] = pairs
-            self._json({'pairs': pairs})
+                state['scan_ports'] = list(PORT_GROUPS[group])
+                state['port_group'] = group
+                est = sum(1 if pt else len(state['scan_ports']) for _, pt in pairs)
+            warn = None
+            if est > 100000:
+                warn = ('حجم اسکن خیلی زیاده (' + str(est) +
+                        ' تست) — گروه سبک‌تر انتخاب کن یا IP کمتر بده')
+            self._json({'pairs': pairs, 'ports': state['scan_ports'],
+                        'group': group, 'warn': warn})
 
         elif p == '/api/scan':
             if state['running']:
@@ -1153,9 +1253,10 @@ def main():
 
     print("""
     ╔════════════════════════════════════════════════════╗
-    ║   ⚡ PROXY PANEL SCANNER v7 — آنلاین ⚡             ║
+    ║   ⚡ PROXY PANEL SCANNER v8 — آنلاین ⚡             ║
     ╠════════════════════════════════════════════════════╣
-    ║  پورت‌های اسکن:  1081 | 1082 | 1083 | 14111        ║
+    ║  گروه پورت: fast / normal / full (از پنل انتخاب کن) ║
+    ║  fast: 10 پورت اصلی | normal: 29 | full: 63         ║
     ║  تشخیص: SOCKS5 / SOCKS4 / HTTP                     ║
     ║  Egress + پرچم + پینگ واقعی پنل                    ║
     ║                                                    ║
